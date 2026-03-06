@@ -1,23 +1,36 @@
-# Social Media App
+# Project Overview
 
-A React-based social media application built with Vite, Firebase, and Tailwind CSS.
-
-## Features
-- Firebase Authentication (Login/Register)
-- Firestore Database (Posts, User Profiles)
-- Firebase Storage (Image uploads)
-- Responsive Design with Tailwind CSS
-- Real-time updates for Feed and Notifications
+A social media app built with React, Vite, and Firebase. Users can register/login, post content, follow others, search users, and receive notifications.
 
 ## Tech Stack
-- React 18
-- Vite 5
-- Tailwind CSS v4
-- Firebase v10
-- React Router DOM v6
-- Lucide React Icons
 
-## Getting Started
-1. Install dependencies: `npm install`
-2. Update `src/firebase.js` with your Firebase configuration.
-3. Start the development server: `npm run dev`
+- **Frontend**: React 18 + Vite
+- **Styling**: Tailwind CSS
+- **Routing**: React Router DOM v6
+- **Backend/DB**: Firebase (Auth, Firestore, Storage)
+- **Icons**: Lucide React
+
+## Project Structure
+
+```
+src/
+  components/    # Reusable UI components (Avatar, BottomNav, Header, Post)
+  context/       # React context (AuthContext with Firebase auth)
+  pages/         # Route pages (Feed, Login, Register, Profile, CreatePost, Notifications, Search)
+  firebase.js    # Firebase initialization and exports
+  main.jsx       # App entry point with BrowserRouter
+  App.jsx        # Route definitions
+```
+
+## Configuration
+
+- **Dev server**: Vite on port 5000, host 0.0.0.0
+- **Firebase project**: lis-app-8c60c
+- **Deployment**: Static site (npm run build → dist/)
+
+## Running
+
+```bash
+npm run dev    # Start dev server on port 5000
+npm run build  # Build to dist/
+```
