@@ -1,57 +1,88 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { auth } from "../firebase.js";
-import { 
-  onAuthStateChanged, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  signOut 
-} from "firebase/auth";
+import { createContext, useContext, useState, useEffect } from "react";
+import { getUserById, updateUser } from "../services/ydb";
 
-const AuthContext = createContext(null);
+const AuthContext = createContext();
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === null) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
+  return useContext(AuthContext);
 }
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
+  const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  function signup(email, password) {
-    return createUserWithEmailAndPassword(auth, email, password);
+  // ✅ РЕГИСТРАЦИЯ (через YDB)
+  async function signup(email, password, username, phone) {
+    // Проверка уникальности уже делается в Register.jsx
+    // Здесь просто возвращаем данные для сохранения в localStorage
+    return { email, username, phone };
   }
 
-  function login(email, password) {
-    return signInWithEmailAndPassword(auth, email, password);
+  // ✅ ВХОД (через YDB + localStorage)
+  async function login(identifier, password) {
+    // Поиск пользователя уже делается в Login.jsx
+    // Здесь просто возвращаем успех
+    return { success: true };
   }
 
+  // ✅ ВЫХОД
   function logout() {
-    return signOut(auth);
+    // Обновляем статус онлайн в YDB
+    if (currentUser?.uid) {
+      updateUser(currentUser.uid, { online: false });
+    }
+
+    // Очищаем localStorage
+    localStorage.removeItem("currentUser");
+    localStorage.removeItem("userPassword");
+
+    setCurrentUser(null);
+    setUserData(null);
+
+    return { success: true };
   }
 
+  // ✅ ЗАГРУЗКА ПОЛЬЗОВАТЕЛЯ ПРИ СТАРТЕ
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
+    async function loadUser() {
+      try {
+        // Пробуем загрузить из localStorage
+        const storedUser = localStorage.getItem("currentUser");
+
+        if (storedUser) {
+          const user = JSON.parse(storedUser);
+
+          // Проверяем актуальность данных в YDB
+          const freshUser = await getUserById(user.uid);
+
+          if (freshUser) {
+            setCurrentUser({ uid: freshUser.uid });
+            setUserData(freshUser);
+          } else {
+            // Пользователь не найден в БД — очищаем
+            localStorage.removeItem("currentUser");
+            localStorage.removeItem("userPassword");
+          }
+        }
+      } catch (error) {
+        console.error("Error loading user:", error);
+      }
       setLoading(false);
-    });
-    return unsubscribe;
+    }
+
+    loadUser();
   }, []);
 
   const value = {
     currentUser,
+    userData,
+    setUserData,
     signup,
     login,
     logout,
-    loading
+    loading,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {!loading && children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

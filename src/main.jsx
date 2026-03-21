@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App.jsx";
 import { AuthProvider } from "./context/AuthContext";
 import "./index.css";
+import "./yandex.js"; // ✅ Yandex Cloud (YDB) - ДОБАВЛЕНО!
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

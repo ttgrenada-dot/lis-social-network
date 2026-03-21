@@ -1,116 +1,153 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import { db } from "../firebase";
 import { collection, query, where, getDocs, limit } from "firebase/firestore";
+import { db } from "../firebase";
+import { useAuth } from "../context/AuthContext";
 import Header from "../components/Header";
 import BottomNav from "../components/BottomNav";
+import Avatar from "../components/Avatar";
 
 export default function Search() {
   const { currentUser } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [loading, setLoading] = useState(false);
 
+  // Поиск в реальном времени
   useEffect(() => {
-    async function searchUsers() {
-      if (!searchQuery.trim()) {
-        setUsers([]);
-        return;
+    const delayDebounce = setTimeout(async () => {
+      if (searchQuery.trim()) {
+        await handleSearch();
+      } else {
+        setSearchResults([]);
       }
+    }, 300); // Ждем 300мс после последнего ввода
 
-      setLoading(true);
+    return () => clearTimeout(delayDebounce);
+  }, [searchQuery]);
 
-      try {
-        const q = query(
-          collection(db, "users"),
-          where("username", ">=", searchQuery.toLowerCase()),
-          where("username", "<=", searchQuery.toLowerCase() + "\uf8ff"),
-          limit(10),
-        );
-
-        const querySnapshot = await getDocs(q);
-        const usersData = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-
-        const filteredUsers = usersData.filter(
-          (user) => user.id !== currentUser.uid,
-        );
-
-        setUsers(filteredUsers);
-      } catch (error) {
-        console.error("Ошибка поиска:", error);
-      } finally {
-        setLoading(false);
-      }
+  async function handleSearch() {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
     }
 
-    const timeoutId = setTimeout(searchUsers, 300);
+    setLoading(true);
+    try {
+      const usersRef = collection(db, "users");
 
-    return () => clearTimeout(timeoutId);
-  }, [searchQuery, currentUser.uid]);
+      // Ищем по username (частичное совпадение, без учета регистра)
+      const q = query(
+        usersRef,
+        where("username", ">=", searchQuery.toLowerCase()),
+        where("username", "<=", searchQuery.toLowerCase() + "\uf8ff"),
+        limit(20),
+      );
+
+      const snapshot = await getDocs(q);
+      const results = snapshot.docs
+        .map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }))
+        .filter((user) => user.uid !== currentUser.uid); // Исключаем себя
+
+      setSearchResults(results);
+    } catch (error) {
+      console.error("Error searching users:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function goToProfile(userId) {
+    navigate(`/profile/${userId}`);
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-400 via-purple-500 to-pink-400">
+    <div className="min-h-screen bg-gradient-to-br from-purple-400 via-purple-500 to-pink-400 pb-20">
       <Header />
 
-      <main className="max-w-2xl mx-auto px-4 py-6 pb-20">
-        <h1 className="text-2xl font-bold text-white mb-6">Поиск</h1>
+      <div className="max-w-2xl mx-auto pt-8 px-4">
+        {/* Поиск */}
+        <div className="bg-white rounded-3xl shadow-xl p-6 mb-6">
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">
+            🔍 Поиск пользователей
+          </h1>
 
-        <div className="mb-6">
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Поиск пользователей..."
-            className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 shadow-lg"
+            placeholder="Введите логин..."
+            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
             style={{ color: "#000000" }}
           />
         </div>
 
-        {loading ? (
-          <div className="flex justify-center py-10">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-white"></div>
-          </div>
-        ) : users.length === 0 && searchQuery.trim() ? (
-          <div className="text-center py-10">
-            <p className="text-white/80 text-lg">Пользователи не найдены</p>
-          </div>
-        ) : users.length === 0 ? (
-          <div className="text-center py-10">
-            <p className="text-white/80 text-lg">Введите имя для поиска</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {users.map((user) => (
-              <div
-                key={user.id}
-                onClick={() => navigate(`/profile/${user.id}`)}
-                className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 cursor-pointer hover:shadow-lg transition-all"
-              >
-                <img
-                  src={
-                    user.avatar ||
-                    "https://i.ibb.co/Lzkg4DLS/737fa499-05ed-4d7d-813c-380b6eb09dfe-1.gif"
-                  }
-                  alt={user.username}
-                  className="w-12 h-12 rounded-full object-cover"
-                />
-                <div className="flex-1">
-                  <p className="font-semibold text-gray-800">{user.username}</p>
-                  <p className="text-sm text-gray-500">{user.email}</p>
-                </div>
-                <button className="text-purple-600 font-semibold text-sm">
-                  Перейти →
-                </button>
-              </div>
-            ))}
+        {/* Результаты */}
+        {loading && (
+          <div className="bg-white rounded-3xl shadow-xl p-8 text-center">
+            <div className="text-4xl mb-4">⏳</div>
+            <p className="text-gray-500">Поиск...</p>
           </div>
         )}
-      </main>
+
+        {searchResults.length === 0 && searchQuery && !loading && (
+          <div className="bg-white rounded-3xl shadow-xl p-8 text-center">
+            <div className="text-6xl mb-4">😕</div>
+            <p className="text-gray-500 text-lg">Никто не найден</p>
+            <p className="text-gray-400 text-sm mt-2">
+              Попробуйте другой логин
+            </p>
+          </div>
+        )}
+
+        {searchResults.length > 0 && (
+          <div className="bg-white rounded-3xl shadow-xl p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">
+              Найдено: {searchResults.length}
+            </h2>
+
+            <div className="space-y-3">
+              {searchResults.map((user) => (
+                <div
+                  key={user.id}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
+                  onClick={() => goToProfile(user.id)}
+                >
+                  <div className="flex items-center space-x-3">
+                    <Avatar
+                      src={user.avatar}
+                      username={user.username}
+                      size="md"
+                    />
+                    <div>
+                      <div className="font-semibold text-gray-900">
+                        {user.username}
+                      </div>
+                    </div>
+                  </div>
+                  <button className="text-purple-600 hover:text-purple-700 font-semibold text-sm">
+                    Перейти →
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!searchQuery && (
+          <div className="bg-white rounded-3xl shadow-xl p-8 text-center">
+            <div className="text-6xl mb-4">🔍</div>
+            <p className="text-gray-500 text-lg">Введите логин для поиска</p>
+            <p className="text-gray-400 text-sm mt-2">
+              Результаты появятся автоматически
+            </p>
+          </div>
+        )}
+      </div>
 
       <BottomNav />
     </div>

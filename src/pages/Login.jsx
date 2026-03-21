@@ -1,121 +1,124 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
+import { useNavigate } from "react-router-dom";
 
 export default function Login() {
-  const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-  });
+  const [identifier, setIdentifier] = useState(""); // телефон или username
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
   const navigate = useNavigate();
-
-  function handleChange(e) {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
-  }
 
   async function handleSubmit(e) {
     e.preventDefault();
-
     setError("");
     setLoading(true);
 
     try {
-      const result = await login(formData.email, formData.password);
+      // Вызываем новый API endpoint для входа
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          login: identifier, // можно username или phone
+          password: password,
+        }),
+      });
 
-      if (result.success) {
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Ошибка входа");
+      }
+
+      // ✅ Успешный вход - сохраняем пользователя
+      if (data.user) {
+        localStorage.setItem("currentUser", JSON.stringify(data.user));
+        console.log("✅ Logged in:", data.user.username);
         navigate("/");
       } else {
-        setError(result.error || "Ошибка входа");
+        throw new Error("Не удалось получить данные пользователя");
       }
     } catch (err) {
-      setError("Произошла ошибка");
+      console.error("Login Error:", err);
+      setError(err.message || "Ошибка при входе");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-400 via-purple-500 to-pink-400">
-      <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+    <div className="min-h-screen bg-gradient-to-br from-purple-400 via-purple-500 to-pink-400 flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <img
-            src="https://i.ibb.co/Lzkg4DLS/737fa499-05ed-4d7d-813c-380b6eb09dfe-1.gif"
-            alt="Lis Logo"
-            className="mb-4 w-20 h-20 object-contain mx-auto"
-          />
+          <img src="/fox.gif" alt="Fox" className="w-20 h-20 mx-auto mb-4" />
           <h1
-            className="text-6xl mb-2"
+            className="text-6xl font-bold mb-2"
             style={{
-              fontFamily: "'Parisienne', cursive",
+              fontFamily: "'Parisienne', 'Brush Script MT', cursive",
               background:
-                "linear-gradient(to right, #fb923c, #ef4444, #ec4899)",
+                "linear-gradient(135deg, #ff6b6b 0%, #ff8e8e 50%, #ffb4b4 100%)",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
               backgroundClip: "text",
+              textShadow: "2px 2px 4px rgba(0, 0, 0, 0.1)",
+              letterSpacing: "2px",
             }}
           >
             Lis
           </h1>
-          <p className="text-gray-500 text-sm">Социальная сеть</p>
+          <p className="text-gray-600">Социальная сеть</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl mb-4 text-sm">
+            {error}
+          </div>
+        )}
 
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <input
-              type="email"
-              name="email"
-              placeholder="Email"
-              value={formData.email}
-              onChange={handleChange}
-              required
-              className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
+              type="text"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              placeholder="📱 Телефон или username"
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
               style={{ color: "#000000" }}
+              required
             />
           </div>
 
           <div>
             <input
               type="password"
-              name="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               placeholder="Пароль"
-              value={formData.password}
-              onChange={handleChange}
-              required
-              className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
               style={{ color: "#000000" }}
+              required
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gradient-to-r from-purple-500 via-purple-600 to-pink-500 text-white py-3 rounded-xl font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all disabled:opacity-50"
           >
-            {loading ? "Вход..." : "Войти"}
+            {loading ? "⏳ Вход..." : "🔐 Войти"}
           </button>
         </form>
 
-        <div className="text-center mt-6 pt-6 border-t border-gray-200">
+        <div className="mt-6 text-center">
           <p className="text-gray-600">
             Нет аккаунта?{" "}
-            <Link
-              to="/register"
-              className="text-purple-600 font-semibold hover:underline"
+            <button
+              onClick={() => navigate("/register")}
+              className="text-purple-600 hover:text-purple-700 font-semibold"
             >
               Зарегистрироваться
-            </Link>
+            </button>
           </p>
         </div>
       </div>

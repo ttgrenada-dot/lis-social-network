@@ -1,3 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=Parisienne&display=swap');
+
+/* Tailwind CSS v4 - только один импорт */
 @import "tailwindcss";
 
 @theme {
@@ -15,5 +18,77 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: linear-gradient(to bottom right, #a78bfa, #8b5cf6, #f472b6);
-  color: white;
+  /* color: white;  ❌ УБРАНО: не задаём цвет текста глобально */
+}
+
+/* ✅ Глобальные стили для изображений */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Изображения в постах */
+.post-image {
+  width: 100%;
+  max-height: 400px;
+  object-fit: cover;
+  border-radius: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+/* Аватары */
+.avatar {
+  border-radius: 9999px;
+  object-fit: cover;
+}
+
+.avatar-sm {
+  width: 32px;
+  height: 32px;
+}
+
+.avatar-md {
+  width: 48px;
+  height: 48px;
+}
+
+.avatar-lg {
+  width: 80px;
+  height: 80px;
+}
+
+/* Анимация для бейджей уведомлений */
+@keyframes bounce-short {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.2);
+  }
+}
+
+.animate-bounce-short {
+  animation: bounce-short 0.3s ease-in-out;
+}
+
+/* Улучшения для скролла */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
 }

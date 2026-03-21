@@ -1,45 +1,57 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 
 export default function Register() {
   const [formData, setFormData] = useState({
-    email: "",
-    password: "",
     username: "",
+    phone: "",
+    password: "",
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { signup } = useAuth();
   const navigate = useNavigate();
 
   function handleChange(e) {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setError("");
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
-
     setError("");
     setLoading(true);
 
     try {
-      const result = await signup(
-        formData.email,
-        formData.password,
-        formData.username,
-      );
+      // Вызываем новый API endpoint для регистрации
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          username: formData.username,
+          phone: formData.phone,
+          password: formData.password,
+          email: "",
+        }),
+      });
 
-      if (result.success) {
-        navigate("/login");
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Ошибка регистрации");
+      }
+
+      // ✅ Успешная регистрация - сохраняем пользователя
+      if (data.user) {
+        localStorage.setItem("currentUser", JSON.stringify(data.user));
+        console.log("✅ Registered:", data.user.username);
+        navigate("/");
       } else {
-        setError(result.error || "Ошибка регистрации");
+        throw new Error("Не удалось получить данные пользователя");
       }
     } catch (err) {
-      setError("Произошла ошибка");
+      console.error("Registration Error:", err);
+      setError(err.message || "Произошла ошибка при регистрации");
     } finally {
       setLoading(false);
     }
@@ -50,19 +62,21 @@ export default function Register() {
       <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
         <div className="text-center mb-8">
           <img
-            src="https://i.ibb.co/Lzkg4DLS/737fa499-05ed-4d7d-813c-380b6eb09dfe-1.gif"
+            src="/fox.gif"
             alt="Lis Logo"
             className="mb-4 w-20 h-20 object-contain mx-auto"
           />
           <h1
-            className="text-6xl mb-2"
+            className="text-6xl font-bold mb-2"
             style={{
-              fontFamily: "'Parisienne', cursive",
+              fontFamily: "'Parisienne', 'Brush Script MT', cursive",
               background:
-                "linear-gradient(to right, #fb923c, #ef4444, #ec4899)",
+                "linear-gradient(135deg, #ff6b6b 0%, #ff8e8e 50%, #ffb4b4 100%)",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
               backgroundClip: "text",
+              textShadow: "2px 2px 4px rgba(0, 0, 0, 0.1)",
+              letterSpacing: "2px",
             }}
           >
             Lis
@@ -70,13 +84,13 @@ export default function Register() {
           <p className="text-gray-500 text-sm">Создать аккаунт</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
+        {error && (
+          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
 
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <input
               type="text"
@@ -85,32 +99,32 @@ export default function Register() {
               value={formData.username}
               onChange={handleChange}
               required
+              minLength="3"
               className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
               style={{ color: "#000000" }}
             />
           </div>
-
           <div>
             <input
-              type="email"
-              name="email"
-              placeholder="Email"
-              value={formData.email}
+              type="tel"
+              name="phone"
+              placeholder="📱 Номер телефона (+7...)"
+              value={formData.phone}
               onChange={handleChange}
               required
               className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
               style={{ color: "#000000" }}
             />
           </div>
-
           <div>
             <input
               type="password"
               name="password"
-              placeholder="Пароль"
+              placeholder="Пароль (мин. 6 символов)"
               value={formData.password}
               onChange={handleChange}
               required
+              minLength="6"
               className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500 transition-colors"
               style={{ color: "#000000" }}
             />
@@ -121,7 +135,7 @@ export default function Register() {
             disabled={loading}
             className="w-full bg-gradient-to-r from-purple-500 via-purple-600 to-pink-500 text-white py-3 rounded-xl font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? "Создание..." : "Создать аккаунт"}
+            {loading ? "⏳ Создание..." : "🦊 Создать аккаунт"}
           </button>
         </form>
 

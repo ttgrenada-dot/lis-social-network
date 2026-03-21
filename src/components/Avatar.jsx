@@ -12,7 +12,7 @@ export default function Avatar({ src, username, size = 'md', onClick }) {
       className={`${sizes[size]} rounded-full overflow-hidden border-2 border-purple-500 cursor-pointer flex-shrink-0`}
     >
       <img 
-        src={src || 'https://i.ibb.co/Lzkg4DLS/737fa499-05ed-4d7d-813c-380b6eb09dfe-1.gif'} 
+        src={src || '/fox.gif'} 
         alt={username} 
         className="w-full h-full object-cover" 
       />
