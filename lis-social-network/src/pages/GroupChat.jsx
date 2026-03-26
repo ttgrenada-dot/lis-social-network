@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { uploadFile } from "../services/upload";
 import Header from "../components/Header";
@@ -35,9 +35,7 @@ export default function GroupChat() {
       setLoading(true);
       const res = await fetch(`/api/groups/${groupId}`);
       const data = await res.json();
-
       if (!res.ok) throw new Error(data.error || "Группа не найдена");
-
       setGroup(data);
       loadMessages();
     } catch (error) {
@@ -74,9 +72,9 @@ export default function GroupChat() {
     }
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `/api/users/search?q=${encodeURIComponent(searchQuery)}`,
-        );
+        let q = searchQuery.trim();
+        if (q.startsWith("@")) q = q.slice(1);
+        const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
         if (res.ok) {
           const users = await res.json();
           const filtered = users.filter(
@@ -97,7 +95,6 @@ export default function GroupChat() {
   const handleSend = async () => {
     if ((!newMessage.trim() && !selectedFile) || !groupId || sending) return;
     setSending(true);
-
     try {
       let fileUrl = "",
         fileType = "",
@@ -112,7 +109,6 @@ export default function GroupChat() {
         fileType = selectedFile.type;
         fileName = selectedFile.name;
       }
-
       const res = await fetch(`/api/groups/${groupId}/messages`, {
         method: "POST",
         headers: {
@@ -129,9 +125,7 @@ export default function GroupChat() {
           avatar: currentUser.avatar,
         }),
       });
-
       const data = await res.json();
-
       if (res.ok) {
         setMessages([...messages, data.message]);
         setNewMessage("");
@@ -148,21 +142,18 @@ export default function GroupChat() {
     }
   };
 
-  // 🔷 УДАЛЕНИЕ СООБЩЕНИЯ (только автор может удалить своё)
+  // 🔷 🔴 УДАЛЕНИЕ СООБЩЕНИЯ (только своё)
   const handleDeleteMessage = async (messageId, senderId) => {
     if (senderId !== currentUser.uid) {
       alert("❌ Можно удалять только свои сообщения!");
       return;
     }
-
     if (!confirm("Удалить это сообщение?")) return;
-
     try {
       const res = await fetch(`/api/groups/${groupId}/messages/${messageId}`, {
         method: "DELETE",
         headers: { "X-User-Id": currentUser.uid },
       });
-
       if (res.ok) {
         setMessages(messages.filter((m) => m.id !== messageId));
       } else {
@@ -175,7 +166,7 @@ export default function GroupChat() {
     }
   };
 
-  // 🔷 Добавление участников
+  // 🔷 Добавление участников (доступно ВСЕМ участникам)
   const handleAddParticipants = async () => {
     if (selectedUsers.length === 0) {
       setShowAddParticipants(false);
@@ -192,8 +183,8 @@ export default function GroupChat() {
           participants: [...(group.participants || []), ...selectedUsers],
         }),
       });
-
       if (res.ok) {
+        // Системное сообщение
         await fetch(`/api/groups/${groupId}/messages`, {
           method: "POST",
           headers: {
@@ -201,12 +192,11 @@ export default function GroupChat() {
             "X-User-Id": currentUser.uid,
           },
           body: JSON.stringify({
-            text: `➕ Добавлено участников: ${selectedUsers.length}`,
+            text: `➕ ${currentUser.username} добавил участников: ${selectedUsers.length}`,
             senderId: "system",
             username: "Система",
           }),
         });
-
         setGroup({
           ...group,
           participants: [...group.participants, ...selectedUsers],
@@ -320,8 +310,6 @@ export default function GroupChat() {
     );
   }
 
-  const isCreator = group.creatorId === currentUser.uid;
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-purple-600 via-purple-300 to-white pb-24">
       <Header />
@@ -335,24 +323,28 @@ export default function GroupChat() {
           >
             <span className="text-2xl text-white">←</span>
           </button>
+
           <div className="w-12 h-12 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center text-white text-xl font-bold cursor-pointer">
             {group.avatar ? (
               <img
                 src={group.avatar}
                 alt={group.name}
                 className="w-full h-full rounded-full object-cover"
+                loading="lazy"
               />
             ) : (
               <span>{(group?.name?.charAt(0) || "G").toUpperCase()}</span>
             )}
           </div>
+
           <div className="flex-1">
             <h2 className="font-bold text-white">{group.name || "Группа"}</h2>
             <p className="text-xs text-white/80">
               {group.participants?.length || 0} участников
             </p>
           </div>
-          {/* 🔴 КНОПКА ДОБАВИТЬ УЧАСТНИКОВ (доступна всем участникам) */}
+
+          {/* 🔴 КНОПКА "+" — ДОБАВИТЬ УЧАСТНИКОВ (доступна ВСЕМ участникам) */}
           <button
             onClick={() => setShowAddParticipants(true)}
             className="p-2 bg-white/20 hover:bg-white/30 text-white rounded-full transition-colors text-2xl font-bold"
@@ -360,7 +352,6 @@ export default function GroupChat() {
           >
             +
           </button>
-          )}
         </div>
       </div>
 
@@ -398,7 +389,7 @@ export default function GroupChat() {
                       : "bg-white/90 text-gray-900 rounded-bl-none shadow-md"
                   }`}
                 >
-                  {/* 🔴 КНОПКА УДАЛЕНИЯ (появляется при наведении на своё сообщение) */}
+                  {/* 🔴 КНОПКА УДАЛЕНИЯ (только свои сообщения) */}
                   {isMy && (
                     <button
                       onClick={() => handleDeleteMessage(msg.id, msg.senderId)}
@@ -409,18 +400,24 @@ export default function GroupChat() {
                     </button>
                   )}
 
-                  {!isMy && msg.username && (
-                    <p className="text-xs font-semibold text-purple-600 mb-1">
-                      {msg.username}
-                    </p>
+                  {/* 🔗 КЛИКАБЕЛЬНЫЙ ЮЗЕРНЕЙМ (в чужих сообщениях) */}
+                  {!isMy && msg.username && msg.senderId && (
+                    <Link
+                      to={`/profile/${msg.senderId}`}
+                      className="text-purple-600 hover:text-purple-800 text-xs font-semibold hover:underline block mb-1"
+                    >
+                      @{msg.username}
+                    </Link>
                   )}
 
+                  {/* Файлы */}
                   {msg.fileUrl && msg.fileType?.startsWith("image/") && (
                     <img
                       src={msg.fileUrl}
                       alt="file"
                       className="rounded-lg mb-2 max-w-full cursor-pointer"
                       onClick={() => window.open(msg.fileUrl, "_blank")}
+                      loading="lazy"
                     />
                   )}
                   {msg.fileUrl && msg.fileType?.startsWith("video/") && (
@@ -428,6 +425,7 @@ export default function GroupChat() {
                       src={msg.fileUrl}
                       controls
                       className="rounded-lg mb-2 max-w-full"
+                      preload="metadata"
                     />
                   )}
                   {msg.fileUrl &&
@@ -448,12 +446,14 @@ export default function GroupChat() {
                       </a>
                     )}
 
+                  {/* Текст */}
                   {msg.text && (
                     <p className="break-words whitespace-pre-wrap">
                       {renderTextWithLinks(msg.text)}
                     </p>
                   )}
 
+                  {/* Время */}
                   <p
                     className={`text-xs mt-1 text-right ${isMy ? "text-purple-100" : "text-gray-400"}`}
                   >
@@ -485,7 +485,7 @@ export default function GroupChat() {
                 }}
                 className="text-red-500 font-bold"
               >
-                ✕
+                ×
               </button>
             </div>
           )}
@@ -562,7 +562,7 @@ export default function GroupChat() {
                         key={user.uid}
                         className="flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-purple-200"
                       >
-                        <span className="text-sm">{user.username}</span>
+                        <span className="text-sm">@{user.username}</span>
                         <button
                           onClick={() => toggleUser(user.uid)}
                           className="text-red-500"
@@ -586,9 +586,10 @@ export default function GroupChat() {
                     src={user.avatar}
                     alt={user.username}
                     className="w-10 h-10 rounded-full"
+                    loading="lazy"
                   />
                   <span className="font-semibold text-gray-800">
-                    {user.username}
+                    @{user.username}
                   </span>
                   {selectedUsers.includes(user.uid) && (
                     <span className="ml-auto text-purple-600">✓</span>

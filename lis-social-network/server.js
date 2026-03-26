@@ -1,5 +1,4 @@
-// server.js - Express + SQLite (persistent) с полной поддержкой чата
-
+// server.js - Express + SQLite с уведомлениями и фото эстафетами
 import express from "express";
 import cors from "cors";
 import { createHash } from "crypto";
@@ -23,7 +22,7 @@ const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// Создаём все таблицы
+// 🔷 СОЗДАЁМ ВСЕ ТАБЛИЦЫ
 db.exec(`
   -- Пользователи
   CREATE TABLE IF NOT EXISTS users (
@@ -41,19 +40,20 @@ db.exec(`
     updated_at    TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE);
-  CREATE INDEX IF NOT EXISTS idx_users_phone    ON users(phone);
+  CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
 
   -- Посты
   CREATE TABLE IF NOT EXISTS posts (
-    id         TEXT PRIMARY KEY,
-    author_id  TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
-    text       TEXT DEFAULT '',
-    image      TEXT DEFAULT '',
-    video      TEXT DEFAULT '',
-    poll       TEXT DEFAULT NULL,
-    likes      TEXT DEFAULT '[]',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    id             TEXT PRIMARY KEY,
+    author_id      TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    text           TEXT DEFAULT '',
+    image          TEXT DEFAULT '',
+    video          TEXT DEFAULT '',
+    poll           TEXT DEFAULT NULL,
+    likes          TEXT DEFAULT '[]',
+    comments_count INTEGER DEFAULT 0,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id);
 
@@ -77,7 +77,7 @@ db.exec(`
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS idx_stories_author  ON stories(author_id);
+  CREATE INDEX IF NOT EXISTS idx_stories_author ON stories(author_id);
   CREATE INDEX IF NOT EXISTS idx_stories_expires ON stories(expires_at);
 
   -- Группы
@@ -89,24 +89,26 @@ db.exec(`
     participants      TEXT DEFAULT '[]',
     last_message      TEXT DEFAULT '',
     last_message_time TEXT DEFAULT '',
+    unread_count      INTEGER DEFAULT 0,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_groups_creator ON groups(creator_id);
 
-  -- 🔥 ЛИЧНЫЕ КОНВЕРСАЦИИ (новое!)
+  -- ЛИЧНЫЕ КОНВЕРСАЦИИ
   CREATE TABLE IF NOT EXISTS conversations (
     id                TEXT PRIMARY KEY,
-    participants      TEXT NOT NULL,  -- JSON array [uid1, uid2]
+    participants      TEXT NOT NULL,
     last_message      TEXT DEFAULT '',
     last_message_by   TEXT DEFAULT '',
     last_message_time TEXT DEFAULT '',
+    unread_count      INTEGER DEFAULT 0,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_conversations_participants ON conversations(participants);
 
-  -- 🔥 СООБЩЕНИЯ (новое!)
+  -- СООБЩЕНИЯ
   CREATE TABLE IF NOT EXISTS messages (
     id              TEXT PRIMARY KEY,
     conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
@@ -122,9 +124,44 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
   CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id);
   CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+
+  -- 🔔 УВЕДОМЛЕНИЯ (НОВОЕ!)
+  CREATE TABLE IF NOT EXISTS notifications (
+    id           TEXT PRIMARY KEY,
+    recipient_id TEXT REFERENCES users(uid) ON DELETE CASCADE,
+    type         TEXT NOT NULL,
+    post_id      TEXT,
+    sender_id    TEXT REFERENCES users(uid),
+    message      TEXT,
+    read         INTEGER DEFAULT 0,
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_id);
+  CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
+
+  -- 📸 ФОТО ЭСТАФЕТА (НОВОЕ!)
+  CREATE TABLE IF NOT EXISTS photo_chains (
+    id          TEXT PRIMARY KEY,
+    creator_id  TEXT REFERENCES users(uid) ON DELETE CASCADE,
+    title       TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_photo_chains_creator ON photo_chains(creator_id);
+
+  CREATE TABLE IF NOT EXISTS photo_chain_items (
+    id        TEXT PRIMARY KEY,
+    chain_id  TEXT REFERENCES photo_chains(id) ON DELETE CASCADE,
+    user_id   TEXT REFERENCES users(uid) ON DELETE CASCADE,
+    photo_url TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_photo_chain_items_chain ON photo_chain_items(chain_id);
+  CREATE INDEX IF NOT EXISTS idx_photo_chain_items_user ON photo_chain_items(user_id);
 `);
 
-// Миграции: добавляем недостающие колонки
+// 🔷 МИГРАЦИИ: добавляем недостающие колонки
 const addColumnIfMissing = (table, column, definition) => {
   try {
     db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
@@ -133,8 +170,12 @@ const addColumnIfMissing = (table, column, definition) => {
     if (!e.message.includes("duplicate column name")) throw e;
   }
 };
+
 addColumnIfMissing("posts", "video", "TEXT DEFAULT ''");
 addColumnIfMissing("posts", "poll", "TEXT DEFAULT NULL");
+addColumnIfMissing("posts", "comments_count", "INTEGER DEFAULT 0");
+addColumnIfMissing("conversations", "unread_count", "INTEGER DEFAULT 0");
+addColumnIfMissing("groups", "unread_count", "INTEGER DEFAULT 0");
 
 console.log(`✅ SQLite database ready: ${DB_PATH}`);
 
@@ -189,6 +230,7 @@ function rowToPost(row, author) {
     isPoll: !!poll,
     likedBy: safeParseJson(row.likes, []),
     likeCount: safeParseJson(row.likes, []).length,
+    commentsCount: row.comments_count || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -217,6 +259,7 @@ function rowToGroup(row) {
     participants: safeParseJson(row.participants, []),
     lastMessage: row.last_message || "",
     lastMessageTime: row.last_message_time || "",
+    unreadCount: row.unread_count || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -242,6 +285,7 @@ function rowToConversation(row) {
     lastMessage: row.last_message || "",
     lastMessageBy: row.last_message_by || "",
     lastMessageTime: row.last_message_time || "",
+    unreadCount: row.unread_count || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -264,6 +308,43 @@ function rowToMessage(row) {
   };
 }
 
+function rowToNotification(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    recipientId: row.recipient_id,
+    type: row.type,
+    postId: row.post_id,
+    senderId: row.sender_id,
+    message: row.message,
+    read: Boolean(row.read),
+    createdAt: row.created_at,
+  };
+}
+
+function rowToPhotoChain(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    title: row.title,
+    description: row.description || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToPhotoChainItem(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    chainId: row.chain_id,
+    userId: row.user_id,
+    photoUrl: row.photo_url,
+    createdAt: row.created_at,
+  };
+}
+
 function safeParseJson(val, fallback = []) {
   try {
     return JSON.parse(val);
@@ -274,6 +355,23 @@ function safeParseJson(val, fallback = []) {
 
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+}
+
+// 🔔 Хелпер для создания уведомлений
+function createNotification(recipientId, type, postId, senderId, message) {
+  if (!recipientId) return;
+  const id = genId();
+  const now = new Date().toISOString();
+  try {
+    db.prepare(
+      `
+      INSERT INTO notifications (id, recipient_id, type, post_id, sender_id, message, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+    ).run(id, recipientId, type, postId, senderId, message, now);
+  } catch (e) {
+    console.error("Error creating notification:", e);
+  }
 }
 
 // ─── AUTH: REGISTER ────────────────────────────────────────────────────────
@@ -387,6 +485,13 @@ app.get("/api/health", (req, res) => {
     .prepare("SELECT COUNT(*) as count FROM conversations")
     .get();
   const msgCount = db.prepare("SELECT COUNT(*) as count FROM messages").get();
+  const notifCount = db
+    .prepare("SELECT COUNT(*) as count FROM notifications")
+    .get();
+  const chainCount = db
+    .prepare("SELECT COUNT(*) as count FROM photo_chains")
+    .get();
+
   res.json({
     status: "ok",
     storage: "SQLite",
@@ -394,6 +499,8 @@ app.get("/api/health", (req, res) => {
     posts: postCount.count,
     conversations: convCount.count,
     messages: msgCount.count,
+    notifications: notifCount?.count || 0,
+    photoChains: chainCount?.count || 0,
     dbPath: DB_PATH,
     timestamp: new Date().toISOString(),
   });
@@ -403,13 +510,16 @@ app.get("/api/health", (req, res) => {
 
 app.get("/api/users/search", (req, res) => {
   try {
-    const q = (req.query.q || "").toLowerCase().trim();
+    let q = (req.query.q || "").trim();
+    if (q.startsWith("@")) q = q.slice(1);
     if (q.length < 2) return res.json([]);
+
     const rows = db
       .prepare(
         "SELECT * FROM users WHERE username LIKE ? COLLATE NOCASE LIMIT 20",
       )
       .all(`${q}%`);
+
     res.json(rows.map(rowToSafeUser));
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -532,12 +642,89 @@ app.put(
 
 // ─── POSTS ─────────────────────────────────────────────────────────────────
 
+// ─── POSTS ─────────────────────────────────────────────────────────────────
+
+// 🔷 ПОЛУЧЕНИЕ ПОСТОВ С ПАГИНАЦИЕЙ
 app.get("/api/posts", (req, res) => {
   try {
-    const rows = db
-      .prepare("SELECT * FROM posts ORDER BY created_at DESC LIMIT 100")
-      .all();
-    res.json(rows.map(rowToPost));
+    const limit = parseInt(req.query.limit) || 20; // Постов на страницу
+    const cursor = req.query.cursor; // ID последнего поста для пагинации
+
+    let query = "SELECT * FROM posts";
+    let params = [];
+
+    if (cursor) {
+      // Получаем дату последнего загруженного поста
+      const lastPost = db
+        .prepare("SELECT created_at FROM posts WHERE id = ?")
+        .get(cursor);
+      if (lastPost) {
+        query += " WHERE created_at < ?";
+        params.push(lastPost.created_at);
+      }
+    }
+
+    query += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const rows = db.prepare(query).all(...params);
+    const enriched = rows.map((row) => {
+      const author = rowToSafeUser(
+        db.prepare("SELECT * FROM users WHERE uid = ?").get(row.author_id),
+      );
+      return rowToPost(row, author);
+    });
+
+    // Возвращаем следующий cursor если есть ещё посты
+    const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
+
+    res.json({
+      posts: enriched,
+      nextCursor,
+      hasMore: !!nextCursor,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🔷 ПОЛУЧЕНИЕ ПОСТОВ ПОЛЬЗОВАТЕЛЯ С ПАГИНАЦИЕЙ
+app.get("/api/posts/by-user/:userId", (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const cursor = req.query.cursor;
+
+    let query = "SELECT * FROM posts WHERE author_id = ?";
+    let params = [req.params.userId];
+
+    if (cursor) {
+      const lastPost = db
+        .prepare("SELECT created_at FROM posts WHERE id = ?")
+        .get(cursor);
+      if (lastPost) {
+        query += " AND created_at < ?";
+        params.push(lastPost.created_at);
+      }
+    }
+
+    query += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const rows = db.prepare(query).all(...params);
+    const enriched = rows.map((row) => {
+      const author = rowToSafeUser(
+        db.prepare("SELECT * FROM users WHERE uid = ?").get(row.author_id),
+      );
+      return rowToPost(row, author);
+    });
+
+    const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
+
+    res.json({
+      posts: enriched,
+      nextCursor,
+      hasMore: !!nextCursor,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -550,7 +737,13 @@ app.get("/api/posts/by-user/:userId", (req, res) => {
         "SELECT * FROM posts WHERE author_id = ? ORDER BY created_at DESC",
       )
       .all(req.params.userId);
-    res.json(rows.map(rowToPost));
+    const enriched = rows.map((row) => {
+      const author = rowToSafeUser(
+        db.prepare("SELECT * FROM users WHERE uid = ?").get(row.author_id),
+      );
+      return rowToPost(row, author);
+    });
+    res.json(enriched);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -570,9 +763,9 @@ app.post(
       const now = new Date().toISOString();
       db.prepare(
         `
-        INSERT INTO posts (id, author_id, text, image, video, poll, likes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)
-      `,
+      INSERT INTO posts (id, author_id, text, image, video, poll, likes, comments_count, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, '[]', 0, ?, ?)
+    `,
       ).run(
         id,
         req.uid,
@@ -583,6 +776,7 @@ app.post(
         now,
         now,
       );
+
       const post = rowToPost(
         db.prepare("SELECT * FROM posts WHERE id = ?").get(id),
       );
@@ -606,9 +800,7 @@ app.put("/api/posts/:id", auth, allowFields("text", "image"), (req, res) => {
     const now = new Date().toISOString();
     const { text, image } = req.body;
     db.prepare(
-      `
-        UPDATE posts SET text = ?, image = ?, updated_at = ? WHERE id = ?
-      `,
+      `UPDATE posts SET text = ?, image = ?, updated_at = ? WHERE id = ?`,
     ).run(
       text !== undefined ? text : post.text,
       image !== undefined ? image : post.image,
@@ -638,42 +830,53 @@ app.delete("/api/posts/:id", auth, (req, res) => {
   }
 });
 
+// 🔔 ЛАЙКИ С УВЕДОМЛЕНИЯМИ
 app.post("/api/posts/:id/like", auth, (req, res) => {
   try {
     const post = db
       .prepare("SELECT * FROM posts WHERE id = ?")
       .get(req.params.id);
     if (!post) return res.status(404).json({ error: "Пост не найден" });
+
     const likes = safeParseJson(post.likes, []);
-    if (!likes.includes(req.uid)) {
+    const isLiked = likes.includes(req.uid);
+
+    if (!isLiked) {
       likes.push(req.uid);
       db.prepare("UPDATE posts SET likes = ?, updated_at = ? WHERE id = ?").run(
         JSON.stringify(likes),
         new Date().toISOString(),
         req.params.id,
       );
-    }
-    res.json({ success: true, likes });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
-app.post("/api/posts/:id/unlike", auth, (req, res) => {
-  try {
-    const post = db
+      // Уведомление автору поста
+      if (post.author_id !== req.uid) {
+        createNotification(
+          post.author_id,
+          "like",
+          post.id,
+          req.uid,
+          "понравился ваш пост",
+        );
+      }
+    } else {
+      const newLikes = likes.filter((uid) => uid !== req.uid);
+      db.prepare("UPDATE posts SET likes = ?, updated_at = ? WHERE id = ?").run(
+        JSON.stringify(newLikes),
+        new Date().toISOString(),
+        req.params.id,
+      );
+    }
+
+    const updatedPost = db
       .prepare("SELECT * FROM posts WHERE id = ?")
       .get(req.params.id);
-    if (!post) return res.status(404).json({ error: "Пост не найден" });
-    const likes = safeParseJson(post.likes, []).filter(
-      (uid) => uid !== req.uid,
-    );
-    db.prepare("UPDATE posts SET likes = ?, updated_at = ? WHERE id = ?").run(
-      JSON.stringify(likes),
-      new Date().toISOString(),
-      req.params.id,
-    );
-    res.json({ success: true, likes });
+    res.json({
+      success: true,
+      likes: safeParseJson(updatedPost.likes, []),
+      likeCount: safeParseJson(updatedPost.likes, []).length,
+      liked: !isLiked,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -688,12 +891,19 @@ app.get("/api/posts/:id/comments", (req, res) => {
         "SELECT * FROM comments WHERE post_id = ? ORDER BY created_at ASC",
       )
       .all(req.params.id);
-    res.json(rows.map(rowToComment));
+    const enriched = rows.map((c) => {
+      const author = rowToSafeUser(
+        db.prepare("SELECT * FROM users WHERE uid = ?").get(c.author_id),
+      );
+      return { ...c, author };
+    });
+    res.json(enriched);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// 🔔 КОММЕНТАРИИ С УВЕДОМЛЕНИЯМИ
 app.post("/api/posts/:id/comments", auth, allowFields("text"), (req, res) => {
   try {
     const { text } = req.body;
@@ -703,7 +913,7 @@ app.post("/api/posts/:id/comments", auth, allowFields("text"), (req, res) => {
         .json({ error: "Комментарий не может быть пустым" });
     }
     const post = db
-      .prepare("SELECT id FROM posts WHERE id = ?")
+      .prepare("SELECT * FROM posts WHERE id = ?")
       .get(req.params.id);
     if (!post) return res.status(404).json({ error: "Пост не найден" });
 
@@ -711,14 +921,43 @@ app.post("/api/posts/:id/comments", auth, allowFields("text"), (req, res) => {
     const now = new Date().toISOString();
     db.prepare(
       `
-        INSERT INTO comments (id, post_id, author_id, text, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `,
+      INSERT INTO comments (id, post_id, author_id, text, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `,
     ).run(id, req.params.id, req.uid, text.trim(), now);
+
+    // Уведомление автору поста
+    if (post.author_id !== req.uid) {
+      createNotification(
+        post.author_id,
+        "comment",
+        post.id,
+        req.uid,
+        "прокомментировал ваш пост",
+      );
+    }
+
+    // Обновить счетчик комментариев
+    const comments = db
+      .prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = ?")
+      .get(req.params.id);
+    db.prepare(
+      "UPDATE posts SET comments_count = ?, updated_at = ? WHERE id = ?",
+    ).run(comments.count, new Date().toISOString(), req.params.id);
+
     const comment = rowToComment(
       db.prepare("SELECT * FROM comments WHERE id = ?").get(id),
     );
-    res.json({ success: true, commentId: id, comment });
+    const author = rowToSafeUser(
+      db.prepare("SELECT * FROM users WHERE uid = ?").get(req.uid),
+    );
+
+    res.json({
+      success: true,
+      commentId: id,
+      comment: { ...comment, author },
+      commentsCount: comments.count,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -737,6 +976,16 @@ app.delete("/api/posts/:id/comments/:cid", auth, (req, res) => {
         .json({ error: "Нет прав: вы не автор комментария" });
     }
     db.prepare("DELETE FROM comments WHERE id = ?").run(req.params.cid);
+
+    // Обновить счетчик
+    const comments = db
+      .prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = ?")
+      .get(req.params.id);
+    db.prepare("UPDATE posts SET comments_count = ? WHERE id = ?").run(
+      comments.count,
+      req.params.id,
+    );
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -884,9 +1133,9 @@ app.post(
       const now = new Date().toISOString();
       db.prepare(
         `
-        INSERT INTO groups (id, name, creator_id, avatar, participants, last_message, last_message_time, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, '', '', ?, ?)
-      `,
+      INSERT INTO groups (id, name, creator_id, avatar, participants, last_message, last_message_time, unread_count, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, '', '', 0, ?, ?)
+    `,
       ).run(
         id,
         name.trim(),
@@ -961,29 +1210,18 @@ app.put(
   },
 );
 
-// 🔥 🔴 УДАЛЕНИЕ ГРУППЫ (только создателем)
 app.delete("/api/groups/:id", auth, (req, res) => {
   try {
     const { id } = req.params;
     const group = db.prepare("SELECT * FROM groups WHERE id = ?").get(id);
-
-    if (!group) {
-      return res.status(404).json({ error: "Группа не найдена" });
-    }
-
-    // Проверяем что пользователь — создатель
+    if (!group) return res.status(404).json({ error: "Группа не найдена" });
     if (group.creator_id !== req.uid) {
       return res
         .status(403)
         .json({ error: "Только создатель может удалить группу" });
     }
-
-    // Удаляем все сообщения группы
     db.prepare("DELETE FROM messages WHERE group_id = ?").run(id);
-
-    // Удаляем группу
     db.prepare("DELETE FROM groups WHERE id = ?").run(id);
-
     console.log(`🗑️ Group deleted: ${id} by ${req.uid}`);
     res.json({ success: true });
   } catch (error) {
@@ -992,7 +1230,6 @@ app.delete("/api/groups/:id", auth, (req, res) => {
   }
 });
 
-// 🔥 СООБЩЕНИЯ В ГРУППАХ
 app.get("/api/groups/:groupId/messages", (req, res) => {
   try {
     const { groupId } = req.params;
@@ -1002,8 +1239,6 @@ app.get("/api/groups/:groupId/messages", (req, res) => {
       )
       .all(groupId);
     const messages = rows.map(rowToMessage);
-
-    // Добавляем данные отправителей
     const enriched = messages.map((msg) => {
       const sender = rowToSafeUser(
         db.prepare("SELECT * FROM users WHERE uid = ?").get(msg.senderId),
@@ -1014,7 +1249,6 @@ app.get("/api/groups/:groupId/messages", (req, res) => {
         avatar: sender?.avatar || "",
       };
     });
-
     res.json(enriched);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1029,32 +1263,26 @@ app.post(
     try {
       const { groupId } = req.params;
       const { text, fileUrl, fileType, fileName } = req.body;
-
       if (!text && !fileUrl) {
         return res
           .status(400)
           .json({ error: "Сообщение не может быть пустым" });
       }
-
-      // Проверяем что пользователь в группе
       const group = db
         .prepare("SELECT * FROM groups WHERE id = ?")
         .get(groupId);
       if (!group) return res.status(404).json({ error: "Группа не найдена" });
-
       const participants = safeParseJson(group.participants, []);
       if (!participants.includes(req.uid)) {
         return res.status(403).json({ error: "Вы не участник этой группы" });
       }
-
       const id = genId();
       const now = new Date().toISOString();
-
       db.prepare(
         `
-        INSERT INTO messages (id, group_id, sender_id, text, file_url, file_type, file_name, read, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-      `,
+      INSERT INTO messages (id, group_id, sender_id, text, file_url, file_type, file_name, read, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `,
       ).run(
         id,
         groupId,
@@ -1066,7 +1294,6 @@ app.post(
         now,
       );
 
-      // Обновляем last_message в группе
       const preview = text
         ? text.length > 50
           ? text.slice(0, 50) + "..."
@@ -1084,7 +1311,6 @@ app.post(
       const sender = rowToSafeUser(
         db.prepare("SELECT * FROM users WHERE uid = ?").get(req.uid),
       );
-
       res.json({
         success: true,
         message: {
@@ -1100,28 +1326,20 @@ app.post(
   },
 );
 
-// 🔥 🔴 УДАЛЕНИЕ СООБЩЕНИЯ В ГРУППЕ (только автором)
 app.delete("/api/groups/:groupId/messages/:messageId", auth, (req, res) => {
   try {
     const { groupId, messageId } = req.params;
     const message = db
       .prepare("SELECT * FROM messages WHERE id = ? AND group_id = ?")
       .get(messageId, groupId);
-
-    if (!message) {
+    if (!message)
       return res.status(404).json({ error: "Сообщение не найдено" });
-    }
-
-    // Проверяем что пользователь — автор сообщения
     if (message.sender_id !== req.uid) {
       return res
         .status(403)
         .json({ error: "Можно удалять только свои сообщения" });
     }
-
-    // Удаляем сообщение
     db.prepare("DELETE FROM messages WHERE id = ?").run(messageId);
-
     console.log(`🗑️ Message deleted: ${messageId} by ${req.uid}`);
     res.json({ success: true });
   } catch (error) {
@@ -1132,20 +1350,15 @@ app.delete("/api/groups/:groupId/messages/:messageId", auth, (req, res) => {
 
 // ─── CONVERSATIONS (ЛИЧНЫЕ ЧАТЫ) ───────────────────────────────────────────
 
-// Получить список личных чатов пользователя
 app.get("/api/conversations/:userId", (req, res) => {
   try {
     const { userId } = req.params;
     const rows = db
       .prepare("SELECT * FROM conversations ORDER BY updated_at DESC")
       .all();
-
-    // Фильтруем чаты где есть этот пользователь
     const userConversations = rows
       .map(rowToConversation)
       .filter((conv) => conv.participants.includes(userId));
-
-    // Добавляем данные собеседников
     const enriched = userConversations.map((conv) => {
       const otherId = conv.participants.find((p) => p !== userId);
       if (otherId) {
@@ -1156,14 +1369,12 @@ app.get("/api/conversations/:userId", (req, res) => {
       }
       return conv;
     });
-
     res.json(enriched);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Создать новый личный чат
 app.post("/api/conversations", auth, (req, res) => {
   try {
     const { participants } = req.body;
@@ -1172,8 +1383,6 @@ app.post("/api/conversations", auth, (req, res) => {
         .status(400)
         .json({ error: "Личный чат должен иметь ровно 2 участника" });
     }
-
-    // Проверяем не существует ли уже такой чат
     const existing = db
       .prepare("SELECT * FROM conversations")
       .all()
@@ -1185,7 +1394,6 @@ app.post("/api/conversations", auth, (req, res) => {
           convParticipants.includes(participants[1])
         );
       });
-
     if (existing) {
       return res.json({
         success: true,
@@ -1194,80 +1402,61 @@ app.post("/api/conversations", auth, (req, res) => {
         conversation: rowToConversation(existing),
       });
     }
-
     const id = genId();
     const now = new Date().toISOString();
-
     db.prepare(
-      `
-      INSERT INTO conversations (id, participants, last_message, last_message_by, last_message_time, created_at, updated_at)
-      VALUES (?, ?, '', '', '', ?, ?)
-    `,
+      `INSERT INTO conversations (id, participants, last_message, last_message_by, last_message_time, unread_count, created_at, updated_at) VALUES (?, ?, '', '', '', 0, ?, ?)`,
     ).run(id, JSON.stringify(participants.sort()), now, now);
-
     const conversation = rowToConversation(
       db.prepare("SELECT * FROM conversations WHERE id = ?").get(id),
     );
     console.log(`💬 Conversation created: ${id}`);
-
     res.json({ success: true, conversationId: id, id, conversation });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Обновить чат (последнее сообщение)
 app.put("/api/conversations/:id", auth, (req, res) => {
   try {
     const { id } = req.params;
     const { lastMessage, lastMessageBy } = req.body;
     const now = new Date().toISOString();
-
     db.prepare(
-      `
-      UPDATE conversations 
-      SET last_message = ?, last_message_by = ?, last_message_time = ?, updated_at = ?
-      WHERE id = ?
-    `,
+      `UPDATE conversations SET last_message = ?, last_message_by = ?, last_message_time = ?, updated_at = ? WHERE id = ?`,
     ).run(lastMessage || "", lastMessageBy || "", now, now, id);
-
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Получить сообщения личного чата
 app.get("/api/conversations/:id/messages", (req, res) => {
-  try {
-    const { id } = req.params;
-    const rows = db
-      .prepare(
-        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 100",
-      )
-      .all(id);
+  // Сбросить непрочитанные при открытии чата
+  db.prepare("UPDATE conversations SET unread_count = 0 WHERE id = ?").run(
+    req.params.id,
+  );
 
-    const messages = rows.map(rowToMessage);
-
-    // Добавляем данные отправителей
-    const enriched = messages.map((msg) => {
-      const sender = rowToSafeUser(
-        db.prepare("SELECT * FROM users WHERE uid = ?").get(msg.senderId),
-      );
-      return {
-        ...msg,
-        username: sender?.username || "Пользователь",
-        avatar: sender?.avatar || "",
-      };
-    });
-
-    res.json(enriched);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  const { id } = req.params;
+  const rows = db
+    .prepare(
+      "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 100",
+    )
+    .all(id);
+  const messages = rows.map(rowToMessage);
+  const enriched = messages.map((msg) => {
+    const sender = rowToSafeUser(
+      db.prepare("SELECT * FROM users WHERE uid = ?").get(msg.senderId),
+    );
+    return {
+      ...msg,
+      username: sender?.username || "Пользователь",
+      avatar: sender?.avatar || "",
+    };
+  });
+  res.json(enriched);
 });
 
-// Отправить сообщение в личный чат
 app.post(
   "/api/conversations/:id/messages",
   auth,
@@ -1276,32 +1465,23 @@ app.post(
     try {
       const { id } = req.params;
       const { text, fileUrl, fileType, fileName } = req.body;
-
       if (!text && !fileUrl) {
         return res
           .status(400)
           .json({ error: "Сообщение не может быть пустым" });
       }
-
-      // Проверяем что пользователь участник чата
       const conv = db
         .prepare("SELECT * FROM conversations WHERE id = ?")
         .get(id);
       if (!conv) return res.status(404).json({ error: "Чат не найден" });
-
       const participants = safeParseJson(conv.participants, []);
       if (!participants.includes(req.uid)) {
         return res.status(403).json({ error: "Вы не участник этого чата" });
       }
-
       const messageId = genId();
       const now = new Date().toISOString();
-
       db.prepare(
-        `
-        INSERT INTO messages (id, conversation_id, sender_id, text, file_url, file_type, file_name, read, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-      `,
+        `INSERT INTO messages (id, conversation_id, sender_id, text, file_url, file_type, file_name, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       ).run(
         messageId,
         id,
@@ -1313,7 +1493,14 @@ app.post(
         now,
       );
 
-      // Обновляем last_message в чате
+      // Увеличить unread_count у собеседника
+      const otherId = participants.find((p) => p !== req.uid);
+      if (otherId) {
+        db.prepare(
+          "UPDATE conversations SET unread_count = unread_count + 1 WHERE id = ?",
+        ).run(id);
+      }
+
       const preview = text
         ? text.length > 50
           ? text.slice(0, 50) + "..."
@@ -1331,7 +1518,6 @@ app.post(
       const sender = rowToSafeUser(
         db.prepare("SELECT * FROM users WHERE uid = ?").get(req.uid),
       );
-
       res.json({
         success: true,
         messageId,
@@ -1348,7 +1534,6 @@ app.post(
   },
 );
 
-// 🔥 🔴 УДАЛЕНИЕ СООБЩЕНИЯ В ЛИЧНОМ ЧАТЕ (только автором)
 app.delete(
   "/api/conversations/:conversationId/messages/:messageId",
   auth,
@@ -1358,21 +1543,14 @@ app.delete(
       const message = db
         .prepare("SELECT * FROM messages WHERE id = ? AND conversation_id = ?")
         .get(messageId, conversationId);
-
-      if (!message) {
+      if (!message)
         return res.status(404).json({ error: "Сообщение не найдено" });
-      }
-
-      // Проверяем что пользователь — автор сообщения
       if (message.sender_id !== req.uid) {
         return res
           .status(403)
           .json({ error: "Можно удалять только свои сообщения" });
       }
-
-      // Удаляем сообщение
       db.prepare("DELETE FROM messages WHERE id = ?").run(messageId);
-
       console.log(`🗑️ Message deleted: ${messageId} by ${req.uid}`);
       res.json({ success: true });
     } catch (error) {
@@ -1381,6 +1559,212 @@ app.delete(
     }
   },
 );
+
+// 🔔 УВЕДОМЛЕНИЯ (НОВОЕ!)
+app.get("/api/notifications", auth, (req, res) => {
+  try {
+    const rows = db
+      .prepare(
+        "SELECT * FROM notifications WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 50",
+      )
+      .all(req.uid);
+    const enriched = rows.map((n) => {
+      const sender = rowToSafeUser(
+        db.prepare("SELECT * FROM users WHERE uid = ?").get(n.sender_id),
+      );
+      return { ...rowToNotification(n), sender };
+    });
+    res.json(enriched);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/notifications/unread-count", auth, (req, res) => {
+  try {
+    const result = db
+      .prepare(
+        "SELECT COUNT(*) as count FROM notifications WHERE recipient_id = ? AND read = 0",
+      )
+      .get(req.uid);
+    res.json({ count: result.count });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/notifications/:id/read", auth, (req, res) => {
+  try {
+    db.prepare(
+      "UPDATE notifications SET read = 1 WHERE id = ? AND recipient_id = ?",
+    ).run(req.params.id, req.uid);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📸 ФОТО ЭСТАФЕТА (НОВОЕ!)
+app.post("/api/photo-chains", auth, (req, res) => {
+  try {
+    const { title, description } = req.body;
+    if (!title) return res.status(400).json({ error: "Название обязательно" });
+    const id = genId();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO photo_chains (id, creator_id, title, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, req.uid, title, description || "", now, now);
+    res.json({ success: true, chainId: id });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/photo-chains", (req, res) => {
+  try {
+    const rows = db
+      .prepare("SELECT * FROM photo_chains ORDER BY updated_at DESC")
+      .all();
+    const enriched = rows.map((c) => {
+      const creator = rowToSafeUser(
+        db.prepare("SELECT * FROM users WHERE uid = ?").get(c.creator_id),
+      );
+      const items = db
+        .prepare(
+          "SELECT * FROM photo_chain_items WHERE chain_id = ? ORDER BY created_at ASC",
+        )
+        .all(c.id);
+      return { ...c, creator, items, itemCount: items.length };
+    });
+    res.json(enriched);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📸 ФОТО ЭСТАФЕТА — ДОБАВЛЕНИЕ ФОТО С УВЕДОМЛЕНИЕМ В ЛЕНТУ
+app.post("/api/photo-chains/:chainId/photos", auth, (req, res) => {
+  try {
+    const { photoUrl } = req.body;
+    if (!photoUrl) return res.status(400).json({ error: "Фото обязательно" });
+
+    // Проверяем существование эстафеты
+    const chain = db
+      .prepare("SELECT * FROM photo_chains WHERE id = ?")
+      .get(req.params.chainId);
+    if (!chain) return res.status(404).json({ error: "Эстафета не найдена" });
+
+    // Добавляем фото в эстафету
+    const itemId = genId();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO photo_chain_items (id, chain_id, user_id, photo_url, created_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run(itemId, req.params.chainId, req.uid, photoUrl, now);
+
+    db.prepare("UPDATE photo_chains SET updated_at = ? WHERE id = ?").run(
+      now,
+      req.params.chainId,
+    );
+
+    // 🔔 СОЗДАЁМ ПОСТ-УВЕДОМЛЕНИЕ В ЛЕНТЕ
+    // Получаем данные пользователя
+    const user = db
+      .prepare("SELECT username, avatar FROM users WHERE uid = ?")
+      .get(req.uid);
+
+    // Создаём пост-уведомление
+    const postId = genId();
+    const notificationText = `📸 @${user?.username || "Пользователь"} добавил фото в эстафету "${chain.title}"`;
+
+    db.prepare(
+      `
+      INSERT INTO posts (id, author_id, text, image, video, poll, likes, comments_count, created_at, updated_at)
+      VALUES (?, ?, ?, '', '', NULL, '[]', 0, ?, ?)
+    `,
+    ).run(
+      postId,
+      req.uid,
+      JSON.stringify({
+        type: "chain_notification",
+        chainId: chain.id,
+        chainTitle: chain.title,
+        action: "added_photo",
+        participantCount: db
+          .prepare(
+            "SELECT COUNT(*) as c FROM photo_chain_items WHERE chain_id = ?",
+          )
+          .get(req.params.chainId).c,
+        maxParticipants: 10, // Можно сделать настраиваемым
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 часа
+      }),
+      now,
+      now,
+    );
+
+    // 🔔 Уведомляем участников эстафеты
+    const participants = db
+      .prepare(
+        "SELECT DISTINCT user_id FROM photo_chain_items WHERE chain_id = ?",
+      )
+      .all(req.params.chainId);
+    for (const p of participants) {
+      if (p.user_id !== req.uid) {
+        createNotification(
+          p.user_id,
+          "chain_update",
+          null,
+          req.uid,
+          `добавил фото в эстафету "${chain.title}"`,
+        );
+      }
+    }
+
+    res.json({ success: true, itemId, postId });
+  } catch (error) {
+    console.error("Error adding photo to chain:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/photo-chains/:id", auth, (req, res) => {
+  try {
+    const chain = db
+      .prepare("SELECT * FROM photo_chains WHERE id = ?")
+      .get(req.params.id);
+    if (!chain) return res.status(404).json({ error: "Эстафета не найдена" });
+    if (chain.creator_id !== req.uid) {
+      return res
+        .status(403)
+        .json({ error: "Только создатель может удалить эстафету" });
+    }
+    db.prepare("DELETE FROM photo_chain_items WHERE chain_id = ?").run(
+      req.params.id,
+    );
+    db.prepare("DELETE FROM photo_chains WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📊 СЧЕТЧИКИ ЧАТОВ
+app.get("/api/conversations/unread-total", auth, (req, res) => {
+  try {
+    const rows = db
+      .prepare("SELECT * FROM conversations WHERE participants LIKE ?")
+      .all(`%${req.uid}%`);
+    const total = rows.reduce((sum, c) => {
+      const parts = safeParseJson(c.participants, []);
+      if (parts.includes(req.uid)) {
+        return sum + (c.unread_count || 0);
+      }
+      return sum;
+    }, 0);
+    res.json({ total });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ─── MISC ──────────────────────────────────────────────────────────────────
 
@@ -1410,8 +1794,10 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`💾 Storage: SQLite (${DB_PATH})`);
   console.log(`🌐 Health: http://localhost:${PORT}/api/health`);
   console.log(`💬 Chat: /api/conversations, /api/groups/:id/messages`);
+  console.log(`🔔 Notifications: /api/notifications`);
+  console.log(`📸 Photo Chains: /api/photo-chains`);
   console.log(
-    `🗑️ Delete: /api/groups/:id, /api/conversations/:id/messages/:msgId, /api/groups/:gid/messages/:msgId`,
+    `🗑️ Delete: /api/groups/:id, /api/conversations/:id/messages/:msgId`,
   );
   console.log("========================================");
 });

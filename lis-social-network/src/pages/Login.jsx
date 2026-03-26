@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
@@ -7,8 +7,23 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [userCount, setUserCount] = useState(0);
   const navigate = useNavigate();
   const { setCurrentUser, setUserData } = useAuth();
+
+  // 🔷 Получаем счетчик пользователей
+  useEffect(() => {
+    const getCount = async () => {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        setUserCount(data.users || 0);
+      } catch (error) {
+        console.error("Error getting user count:", error);
+      }
+    };
+    getCount();
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -71,6 +86,13 @@ export default function Login() {
             Lis
           </h1>
           <p className="text-gray-600">Социальная сеть</p>
+
+          {/* 🔢 Счетчик пользователей */}
+          {userCount > 0 && (
+            <p className="text-sm text-purple-600 mt-2 font-semibold bg-purple-50 py-1 px-3 rounded-full inline-block">
+              🦊 Нас уже {userCount} человек!
+            </p>
+          )}
         </div>
 
         {error && (

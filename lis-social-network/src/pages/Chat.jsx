@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   getUserById,
@@ -8,6 +8,7 @@ import {
   getConversations,
   createConversation,
   updateConversation,
+  deleteMessage,
 } from "../services/ydb";
 import { uploadFile } from "../services/upload";
 import Header from "../components/Header";
@@ -50,9 +51,6 @@ function getFileIcon(type) {
   if (type.startsWith("video/")) return "🎬";
   if (type.startsWith("audio/")) return "🎵";
   if (type.includes("pdf")) return "📕";
-  if (type.includes("word") || type.includes("document")) return "📝";
-  if (type.includes("excel") || type.includes("sheet")) return "📊";
-  if (type.includes("zip") || type.includes("rar")) return "🗜️";
   return "📎";
 }
 
@@ -92,7 +90,6 @@ export default function Chat() {
   // 🔷 Поиск/создание разговора
   useEffect(() => {
     if (!userId || !currentUser) return;
-
     const findOrCreateConversation = async () => {
       try {
         const conversations = await getConversations(currentUser.uid);
@@ -103,7 +100,6 @@ export default function Chat() {
             participants.includes(currentUser.uid)
           );
         });
-
         if (existingConv) {
           setConversationId(existingConv.conversationId || existingConv.id);
         } else {
@@ -121,11 +117,10 @@ export default function Chat() {
     findOrCreateConversation();
   }, [userId, currentUser]);
 
-  // 🔷 Загрузка сообщений (опрос каждые 3 сек)
+  // 🔷 Загрузка сообщений
   useEffect(() => {
     if (!conversationId) return;
     let intervalId;
-
     const loadMessages = async () => {
       try {
         const msgs = await getMessages(conversationId);
@@ -136,7 +131,6 @@ export default function Chat() {
         setLoading(false);
       }
     };
-
     loadMessages();
     intervalId = setInterval(loadMessages, 3000);
     return () => {
@@ -144,7 +138,7 @@ export default function Chat() {
     };
   }, [conversationId]);
 
-  // 🔷 Автопрокрутка вниз
+  // 🔷 Автопрокрутка
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -154,7 +148,6 @@ export default function Chat() {
     if ((!newMessage.trim() && !selectedFile) || !conversationId || sending)
       return;
     setSending(true);
-
     try {
       let fileUrl = "",
         fileType = "",
@@ -169,7 +162,6 @@ export default function Chat() {
         fileType = selectedFile.type;
         fileName = selectedFile.name;
       }
-
       await addMessage(conversationId, {
         senderId: currentUser.uid,
         text: newMessage.trim(),
@@ -178,12 +170,9 @@ export default function Chat() {
         fileName,
         read: false,
       });
-
       setNewMessage("");
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
-
-      // Обновляем lastMessage
       if (conversationId) {
         await updateConversation(conversationId, {
           lastMessage:
@@ -200,35 +189,19 @@ export default function Chat() {
     }
   };
 
-  // 🔷 🔴 УДАЛЕНИЕ СООБЩЕНИЯ (только автор может удалить своё)
+  // 🔷 🔴 УДАЛЕНИЕ СООБЩЕНИЯ (только своё)
   const handleDeleteMessage = async (messageId, senderId) => {
     if (senderId !== currentUser.uid) {
       alert("❌ Можно удалять только свои сообщения!");
       return;
     }
-
     if (!confirm("Удалить это сообщение?")) return;
-
     try {
-      const res = await fetch(
-        `/api/conversations/${conversationId}/messages/${messageId}`,
-        {
-          method: "DELETE",
-          headers: { "X-User-Id": currentUser.uid },
-        },
-      );
-
-      if (res.ok) {
-        setMessages(
-          messages.filter((m) => (m.id || m.messageId) !== messageId),
-        );
-      } else {
-        const err = await res.json();
-        alert("Ошибка: " + err.error);
-      }
+      await deleteMessage(conversationId, messageId);
+      setMessages(messages.filter((m) => (m.id || m.messageId) !== messageId));
     } catch (error) {
       console.error("Error deleting message:", error);
-      alert("Ошибка удаления");
+      alert("Ошибка: " + error.message);
     }
   };
 
@@ -258,9 +231,7 @@ export default function Chat() {
   };
 
   // 🔷 Эмодзи
-  const handleEmojiSelect = (emoji) => {
-    setNewMessage((prev) => prev + emoji);
-  };
+  const handleEmojiSelect = (emoji) => setNewMessage((prev) => prev + emoji);
 
   // 🔷 Простая панель эмодзи
   const SimpleEmojiPicker = () => {
@@ -329,7 +300,6 @@ export default function Chat() {
       "🌙",
       "⭐",
     ];
-
     return (
       <div className="absolute bottom-full right-0 mb-2 w-72 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-purple-200 p-3 z-50">
         <div className="flex justify-between items-center mb-2">
@@ -359,7 +329,7 @@ export default function Chat() {
     );
   };
 
-  // 🔷 Если нет собеседника — показываем заглушку
+  // 🔷 Если нет собеседника
   if (!otherUser && !loading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-purple-600 via-purple-300 to-white flex items-center justify-center">
@@ -383,7 +353,7 @@ export default function Chat() {
       {/* 🔷 ШАПКА ЧАТА */}
       <div className="bg-white/90 backdrop-blur-sm border-b border-purple-200 sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          {/* ← Стрелка назад в ленту */}
+          {/* ← Назад в ленту */}
           <button
             onClick={() => navigate("/")}
             className="p-2 hover:bg-purple-100 rounded-full transition-colors"
@@ -391,7 +361,6 @@ export default function Chat() {
           >
             <span className="text-2xl">←</span>
           </button>
-
           {/* 🦊 Логотип Lis ПО ЦЕНТРУ */}
           <h1
             className="text-3xl font-bold cursor-pointer"
@@ -409,8 +378,7 @@ export default function Chat() {
           >
             Lis
           </h1>
-
-          {/* 🔍 Поиск по сообщениям */}
+          {/* 🔍 Поиск */}
           <button
             className="p-2 hover:bg-purple-100 rounded-full transition-colors"
             title="Поиск по сообщениям"
@@ -418,25 +386,32 @@ export default function Chat() {
             <span className="text-xl">🔍</span>
           </button>
         </div>
-
         {/* Информация о собеседнике */}
         {otherUser && (
           <div className="px-4 pb-3 flex items-center gap-3">
-            <div className="relative">
+            {/* 🔗 КЛИКАБЕЛЬНЫЙ АВАТАР */}
+            <Link to={`/profile/${otherUser.id}`} className="relative">
               <img
                 src={
                   otherUser.avatar ||
-                  "https://i.ibb.co/Lzkg4DLS/737fa499-05ed-4d7d-813c-380b6eb09dfe-1.gif  "
+                  "https://i.ibb.co/Lzkg4DLS/737fa499-05ed-4d7d-813c-380b6eb09dfe-1.gif"
                 }
                 alt={otherUser.username}
                 className="w-10 h-10 rounded-full object-cover border-2 border-purple-300"
+                loading="lazy"
               />
               {otherUser.online && (
                 <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white animate-pulse"></div>
               )}
-            </div>
+            </Link>
             <div>
-              <h2 className="font-bold text-gray-900">{otherUser.username}</h2>
+              {/* 🔗 КЛИКАБЕЛЬНОЕ ИМЯ */}
+              <Link
+                to={`/profile/${otherUser.id}`}
+                className="font-bold text-gray-900 hover:text-purple-600 transition-colors hover:underline"
+              >
+                @{otherUser.username}
+              </Link>
               <p className="text-xs text-gray-500">
                 {otherUser.online ? "онлайн" : "офлайн"}
               </p>
@@ -462,20 +437,15 @@ export default function Chat() {
           messages.map((msg) => {
             const isMy = msg.senderId === currentUser?.uid;
             const messageId = msg.id || msg.messageId;
-
             return (
               <div
                 key={messageId}
                 className={`flex ${isMy ? "justify-end" : "justify-start"} message-bubble relative group`}
               >
                 <div
-                  className={`max-w-[75%] rounded-2xl px-4 py-3 ${
-                    isMy
-                      ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-br-none shadow-lg"
-                      : "bg-white/90 text-gray-900 rounded-bl-none shadow-md border border-purple-100"
-                  }`}
+                  className={`max-w-[75%] rounded-2xl px-4 py-3 ${isMy ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-br-none shadow-lg" : "bg-white/90 text-gray-900 rounded-bl-none shadow-md border border-purple-100"}`}
                 >
-                  {/* 🔴 КНОПКА УДАЛЕНИЯ (появляется при наведении на своё сообщение) */}
+                  {/* 🔴 КНОПКА УДАЛЕНИЯ (только свои сообщения) */}
                   {isMy && (
                     <button
                       onClick={() =>
@@ -488,6 +458,16 @@ export default function Chat() {
                     </button>
                   )}
 
+                  {/* 🔗 КЛИКАБЕЛЬНЫЙ ЮЗЕРНЕЙМ (в чужих сообщениях) */}
+                  {!isMy && msg.username && (
+                    <Link
+                      to={`/profile/${msg.senderId}`}
+                      className="text-purple-600 hover:text-purple-800 text-xs font-semibold hover:underline block mb-1"
+                    >
+                      @{msg.username}
+                    </Link>
+                  )}
+
                   {/* Файлы */}
                   {msg.fileUrl && msg.fileType?.startsWith("image/") && (
                     <img
@@ -495,6 +475,7 @@ export default function Chat() {
                       alt="file"
                       className="rounded-lg mb-2 max-w-full cursor-pointer hover:opacity-90 transition-opacity"
                       onClick={() => window.open(msg.fileUrl, "_blank")}
+                      loading="lazy"
                     />
                   )}
                   {msg.fileUrl && msg.fileType?.startsWith("video/") && (
@@ -502,6 +483,7 @@ export default function Chat() {
                       src={msg.fileUrl}
                       controls
                       className="rounded-lg mb-2 max-w-full"
+                      preload="metadata"
                     />
                   )}
                   {msg.fileUrl &&
@@ -543,10 +525,9 @@ export default function Chat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 🔷 ПОЛЕ ВВОДА — фиксированное внизу */}
+      {/* 🔷 ПОЛЕ ВВОДА */}
       <div className="fixed bottom-20 left-0 right-0 bg-white/90 backdrop-blur-sm border-t border-purple-200">
         <div className="max-w-4xl mx-auto px-4 py-3">
-          {/* Прикреплённый файл */}
           {selectedFile && (
             <div className="mb-2 flex items-center justify-between bg-purple-50 p-2 rounded-lg">
               <span className="text-sm truncate flex items-center gap-2 text-gray-800">
@@ -562,12 +543,10 @@ export default function Chat() {
                 }}
                 className="text-red-500 hover:text-red-600 font-bold"
               >
-                ✕
+                ×
               </button>
             </div>
           )}
-
-          {/* Ввод + кнопки */}
           <div className="flex items-center gap-2 relative">
             {/* 📎 Прикрепить */}
             <label
@@ -582,7 +561,6 @@ export default function Chat() {
               />
               <span className="text-2xl">📎</span>
             </label>
-
             {/* Поле ввода */}
             <input
               type="text"
@@ -593,7 +571,6 @@ export default function Chat() {
               className="flex-1 px-4 py-3 bg-purple-50 border-2 border-purple-200 rounded-full focus:outline-none focus:border-purple-500 text-gray-800 placeholder-gray-500"
               disabled={sending}
             />
-
             {/* 😊 Эмодзи */}
             <div className="relative">
               <button
@@ -605,7 +582,6 @@ export default function Chat() {
               </button>
               {showEmojiPicker && <SimpleEmojiPicker />}
             </div>
-
             {/* ➤ Отправить */}
             <button
               onClick={handleSend}
@@ -615,14 +591,11 @@ export default function Chat() {
               {sending ? "⏳" : "➤"}
             </button>
           </div>
-
-          {/* Подсказка по лимитам */}
           <p className="text-xs text-gray-400 text-center mt-2">
             📷 Фото (10MB) • 🎬 Видео (100MB) • 📄 Файлы (50MB)
           </p>
         </div>
       </div>
-
       <BottomNav />
     </div>
   );

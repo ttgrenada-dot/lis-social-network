@@ -6,7 +6,7 @@
     "diagnose": "node diagnose.cjs",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "node server.js",
-    "client": "vite --port 5000 --host 0.0.0.0",
+    "client": "vite --port 5173 --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.js",

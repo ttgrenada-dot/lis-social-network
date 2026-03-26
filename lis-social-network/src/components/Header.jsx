@@ -1,10 +1,40 @@
+import { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 
 export default function Header() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { currentUser } = useAuth();
+
+  const [notificationCount, setNotificationCount] = useState(0);
+  const [chatCount, setChatCount] = useState(0);
 
   const isActive = (path) => location.pathname === path;
+
+  // 🔷 Обновляем счетчики
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const getCounts = async () => {
+      try {
+        const [notifRes, chatRes] = await Promise.all([
+          fetch("/api/notifications/unread-count"),
+          fetch("/api/conversations/unread-total"),
+        ]);
+        const notifData = await notifRes.json();
+        const chatData = await chatRes.json();
+        setNotificationCount(notifData.count || 0);
+        setChatCount(chatData.total || 0);
+      } catch (error) {
+        console.error("Error getting counts:", error);
+      }
+    };
+
+    getCounts();
+    const interval = setInterval(getCounts, 10000); // Обновлять каждые 10 сек
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   return (
     <header className="bg-gradient-to-b from-purple-600 via-purple-500 to-purple-400 shadow-sm sticky top-0 z-50">
@@ -56,32 +86,42 @@ export default function Header() {
             </span>
           </Link>
 
-          {/* Правая часть: ❓ Q&A + 💬 Чат */}
+          {/* Правая часть: 🔔 Уведомления + 💬 Чат */}
           <div className="flex items-center gap-1">
-            {/* ❓ Q&A — ПЕРВАЯ ИКОНКА */}
+            {/* 🔔 УВЕДОМЛЕНИЯ — ПЕРВАЯ ИКОНКА */}
             <Link
-              to="/qa-chain"
-              className={`flex flex-col items-center p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all backdrop-blur-sm min-w-[50px] ${
-                isActive("/qa-chain") ? "bg-white/30 scale-105" : ""
+              to="/notifications"
+              className={`relative flex flex-col items-center p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all backdrop-blur-sm min-w-[50px] ${
+                isActive("/notifications") ? "bg-white/30 scale-105" : ""
               }`}
-              title="Вопрос-ответ"
+              title="Уведомления"
             >
-              <span className="text-xl">❓</span>
-              <span className="text-[9px] text-white/90 font-medium leading-tight">
-                Q&A
+              <span className="text-xl">🔔</span>
+              {notificationCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center font-bold border-2 border-purple-500">
+                  {notificationCount > 9 ? "9+" : notificationCount}
+                </span>
+              )}
+              <span className="text-[9px] text-white/90 font-medium leading-tight mt-0.5">
+                Увед.
               </span>
             </Link>
 
             {/* 💬 ЧАТ — ВТОРАЯ ИКОНКА */}
             <button
               onClick={() => navigate("/messages")}
-              className={`flex flex-col items-center p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all backdrop-blur-sm min-w-[50px] ${
+              className={`relative flex flex-col items-center p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all backdrop-blur-sm min-w-[50px] ${
                 isActive("/messages") ? "bg-white/30 scale-105" : ""
               }`}
               title="Сообщения"
             >
               <span className="text-xl">💬</span>
-              <span className="text-[9px] text-white/90 font-medium leading-tight">
+              {chatCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center font-bold border-2 border-purple-500">
+                  {chatCount > 9 ? "9+" : chatCount}
+                </span>
+              )}
+              <span className="text-[9px] text-white/90 font-medium leading-tight mt-0.5">
                 Чат
               </span>
             </button>

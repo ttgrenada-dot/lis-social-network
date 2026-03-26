@@ -1,10 +1,13 @@
 import { createContext, useContext, useState, useEffect } from "react";
-import { getUserById, updateUser } from "../services/ydb";
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export function useAuth() {
-  return useContext(AuthContext);
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
 }
 
 export function AuthProvider({ children }) {
@@ -12,77 +15,120 @@ export function AuthProvider({ children }) {
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // ✅ РЕГИСТРАЦИЯ (через YDB)
-  async function signup(email, password, username, phone) {
-    // Проверка уникальности уже делается в Register.jsx
-    // Здесь просто возвращаем данные для сохранения в localStorage
-    return { email, username, phone };
-  }
-
-  // ✅ ВХОД (через YDB + localStorage)
-  async function login(identifier, password) {
-    // Поиск пользователя уже делается в Login.jsx
-    // Здесь просто возвращаем успех
-    return { success: true };
-  }
-
-  // ✅ ВЫХОД
-  function logout() {
-    // Обновляем статус онлайн в YDB
-    if (currentUser?.uid) {
-      updateUser(currentUser.uid, { online: false });
-    }
-
-    // Очищаем localStorage
-    localStorage.removeItem("currentUser");
-    localStorage.removeItem("userPassword");
-
-    setCurrentUser(null);
-    setUserData(null);
-
-    return { success: true };
-  }
-
-  // ✅ ЗАГРУЗКА ПОЛЬЗОВАТЕЛЯ ПРИ СТАРТЕ
+  // 🔷 Проверка сессии при загрузке приложения
   useEffect(() => {
-    async function loadUser() {
+    const checkAuth = async () => {
       try {
-        // Пробуем загрузить из localStorage
-        const storedUser = localStorage.getItem("currentUser");
-
-        if (storedUser) {
-          const user = JSON.parse(storedUser);
-
-          // Проверяем актуальность данных в YDB
-          const freshUser = await getUserById(user.uid);
-
-          if (freshUser) {
-            setCurrentUser({ uid: freshUser.uid });
-            setUserData(freshUser);
+        const savedUser = localStorage.getItem("lis_user");
+        if (savedUser) {
+          const user = JSON.parse(savedUser);
+          // Проверяем валидность пользователя через API
+          const res = await fetch(`/api/users/${user.uid}`, {
+            headers: { "X-User-Id": user.uid },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setCurrentUser(user);
+            setUserData(data);
           } else {
-            // Пользователь не найден в БД — очищаем
-            localStorage.removeItem("currentUser");
-            localStorage.removeItem("userPassword");
+            // Сессия невалидна — очищаем
+            localStorage.removeItem("lis_user");
           }
         }
       } catch (error) {
-        console.error("Error loading user:", error);
+        console.error("Auth check error:", error);
+        localStorage.removeItem("lis_user");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-    }
-
-    loadUser();
+    };
+    checkAuth();
   }, []);
+
+  // 🔷 Логин
+  const login = async (loginInput, password) => {
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login: loginInput, password }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem("lis_user", JSON.stringify(data.user));
+        setCurrentUser(data.user);
+        setUserData(data.user);
+        return { success: true };
+      }
+      return { success: false, error: data.error };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  };
+
+  // 🔷 Регистрация
+  const register = async (username, phone, password, email) => {
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, phone, password, email }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem("lis_user", JSON.stringify(data.user));
+        setCurrentUser(data.user);
+        setUserData(data.user);
+        return { success: true };
+      }
+      return { success: false, error: data.error };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  };
+
+  // 🔷 Логаут
+  const logout = () => {
+    localStorage.removeItem("lis_user");
+    setCurrentUser(null);
+    setUserData(null);
+    return { success: true };
+  };
+
+  // 🔷 Обновление данных пользователя
+  const updateUserData = async (updates) => {
+    if (!currentUser) return { success: false, error: "Not authenticated" };
+    try {
+      const res = await fetch(`/api/users/${currentUser.uid}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Id": currentUser.uid,
+        },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok) {
+        const updated = { ...currentUser, ...updates };
+        localStorage.setItem("lis_user", JSON.stringify(updated));
+        setCurrentUser(updated);
+        setUserData(updated);
+        return { success: true };
+      }
+      const data = await res.json();
+      return { success: false, error: data.error };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  };
 
   const value = {
     currentUser,
-    setCurrentUser,
     userData,
-    setUserData,
-    signup,
-    login,
-    logout,
     loading,
+    login,
+    register,
+    logout,
+    updateUserData,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

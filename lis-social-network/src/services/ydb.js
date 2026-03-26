@@ -93,7 +93,7 @@ async function apiRequest(endpoint, options = {}) {
       error.name === "TypeError"
     ) {
       throw new Error(
-        `Cannot connect to API server at ${API_BASE || window.location.origin}. Is the backend running?`
+        `Cannot connect to API server at ${API_BASE || window.location.origin}. Is the backend running?`,
       );
     }
     throw error;
@@ -130,7 +130,7 @@ export async function getUserById(uid) {
 
 export async function getUserByUsername(username) {
   return apiRequest(
-    `/api/users/by-username/${encodeURIComponent(username.toLowerCase())}`
+    `/api/users/by-username/${encodeURIComponent(username.toLowerCase())}`,
   );
 }
 
@@ -169,7 +169,9 @@ export async function uploadAvatar(file) {
 
         // Обновляем кешированного пользователя в localStorage
         try {
-          const stored = JSON.parse(localStorage.getItem("currentUser") || "{}");
+          const stored = JSON.parse(
+            localStorage.getItem("currentUser") || "{}",
+          );
           stored.avatar = base64;
           localStorage.setItem("currentUser", JSON.stringify(stored));
         } catch {}
@@ -192,7 +194,7 @@ export async function getPosts(limit = 50) {
 
 export async function getPostsByUser(userId, limit = 50) {
   return apiRequest(
-    `/api/posts/by-user/${encodeURIComponent(userId)}?limit=${limit}`
+    `/api/posts/by-user/${encodeURIComponent(userId)}?limit=${limit}`,
   );
 }
 
@@ -240,7 +242,7 @@ export async function addComment(postId, commentData) {
   return apiRequest(`/api/posts/${encodeURIComponent(postId)}/comments`, {
     method: "POST",
     body: JSON.stringify(
-      typeof commentData === "string" ? { text: commentData } : commentData
+      typeof commentData === "string" ? { text: commentData } : commentData,
     ),
   });
 }
@@ -248,7 +250,7 @@ export async function addComment(postId, commentData) {
 export async function deleteComment(commentId, postId) {
   return apiRequest(
     `/api/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
-    { method: "DELETE" }
+    { method: "DELETE" },
   );
 }
 
@@ -275,7 +277,7 @@ export async function updateConversation(conversationId, data) {
     {
       method: "PUT",
       body: JSON.stringify(data),
-    }
+    },
   );
 }
 
@@ -283,7 +285,7 @@ export async function updateConversation(conversationId, data) {
 
 export async function getMessages(conversationId) {
   return apiRequest(
-    `/api/conversations/${encodeURIComponent(conversationId)}/messages`
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
   );
 }
 
@@ -293,7 +295,23 @@ export async function addMessage(conversationId, messageData) {
     {
       method: "POST",
       body: JSON.stringify(messageData),
-    }
+    },
+  );
+}
+
+// 🔷 УДАЛЕНИЕ СООБЩЕНИЯ (личный чат) — НОВОЕ!
+export async function deleteMessage(conversationId, messageId) {
+  return apiRequest(
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    { method: "DELETE" },
+  );
+}
+
+// 🔷 УДАЛЕНИЕ СООБЩЕНИЯ (групповой чат) — НОВОЕ!
+export async function deleteGroupMessage(groupId, messageId) {
+  return apiRequest(
+    `/api/groups/${encodeURIComponent(groupId)}/messages/${encodeURIComponent(messageId)}`,
+    { method: "DELETE" },
   );
 }
 
@@ -408,4 +426,95 @@ export async function isFriend(userId1, userId2) {
     isFollower(userId1, userId2).catch(() => false),
   ]);
   return aFollowsB && bFollowsA;
+}
+
+// ─── NOTIFICATIONS ─────────────────────────────────────────────────────────
+
+export async function getNotifications() {
+  return apiRequest("/api/notifications");
+}
+
+export async function getUnreadNotificationsCount() {
+  return apiRequest("/api/notifications/unread-count");
+}
+
+export async function markNotificationAsRead(notificationId) {
+  return apiRequest(
+    `/api/notifications/${encodeURIComponent(notificationId)}/read`,
+    {
+      method: "PUT",
+    },
+  );
+}
+
+export async function markAllNotificationsAsRead() {
+  // Бэкенд не поддерживает массовое обновление, делаем по одному
+  const notifications = await getNotifications();
+  const unread = notifications.filter((n) => !n.read);
+  for (const notif of unread) {
+    await markNotificationAsRead(notif.id);
+  }
+  return { success: true };
+}
+
+export async function deleteNotification(notificationId) {
+  // Бэкенд не поддерживает удаление уведомлений, просто игнорируем
+  return { success: true };
+}
+
+// ─── PHOTO CHAINS ──────────────────────────────────────────────────────────
+
+export async function getPhotoChains() {
+  return apiRequest("/api/photo-chains");
+}
+
+export async function createPhotoChain(data) {
+  return apiRequest("/api/photo-chains", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function addPhotoToChain(
+  chainId,
+  userId,
+  username,
+  avatar,
+  photoUrl,
+  taggedUser = null,
+) {
+  return apiRequest(`/api/photo-chains/${encodeURIComponent(chainId)}/photos`, {
+    method: "POST",
+    body: JSON.stringify({ photoUrl }),
+  });
+}
+
+export async function deletePhotoChain(chainId, userId, creatorId) {
+  if (userId !== creatorId) {
+    return { success: false, error: "Только создатель может удалить эстафету" };
+  }
+  return apiRequest(`/api/photo-chains/${encodeURIComponent(chainId)}`, {
+    method: "DELETE",
+  });
+}
+
+// ─── UPLOAD ────────────────────────────────────────────────────────────────
+
+export async function uploadFile(file, userId, folder = "uploads") {
+  // Конвертируем файл в base64 для отправки на сервер
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const base64 = e.target.result;
+        // В реальном проекте здесь была бы загрузка на Yandex Cloud / S3
+        // Для SQLite просто возвращаем base64 как URL
+        resolve(base64);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error("Ошибка чтения файла"));
+    reader.readAsDataURL(file);
+  });
 }
